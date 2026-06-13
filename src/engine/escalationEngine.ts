@@ -62,7 +62,7 @@ export interface SimulationState {
 }
 
 export const MAX_WAVES = 4
-export const MAX_TOTAL_STRIKES = 30
+export const MAX_TOTAL_STRIKES = 60  // raised from 30 – allows dramatic Russia↔US exchanges
 export const FLIGHT_TIME_PER_KM = 0.005
 export const CLOCK_SPEED = 2
 
@@ -136,8 +136,11 @@ function getInitialStrikeCount(arsenal: ArsenalEntry | null) {
 
   const available =
     arsenal.deployedWarheads > 0 ? arsenal.deployedWarheads : Math.max(1, Math.round(arsenal.warheads * 0.05))
-  const scaled = Math.max(1, Math.round(available / 250))
-  return Math.min(available, 8, scaled)
+
+  // Scale missiles to arsenal size so Russia/US send many, North Korea sends few.
+  // Dividing by 80 gives: Russia(~1600) → 20 → capped at 15; NK(~2) → 1.
+  const scaled = Math.max(1, Math.round(available / 80))
+  return Math.min(available, 15, scaled)
 }
 
 function getRetaliationStrikeCount(arsenal: ArsenalEntry | null) {
@@ -146,7 +149,8 @@ function getRetaliationStrikeCount(arsenal: ArsenalEntry | null) {
   }
 
   if (arsenal.deployedWarheads > 0) {
-    return Math.max(1, Math.min(5, Math.round(arsenal.deployedWarheads / 20)))
+    // Raise cap from 5 → 10 to allow larger retaliatory salvos from major powers
+    return Math.max(1, Math.min(10, Math.round(arsenal.deployedWarheads / 20)))
   }
 
   return 1
