@@ -1,6 +1,6 @@
 import { type ComponentType, useEffect, useMemo, useRef, useState } from 'react'
 import { getBlastRings } from '../engine/casualtyModel'
-import { CLOCK_SPEED, type Country, type Strike } from '../engine/escalationEngine'
+import { type Country, type Strike } from '../engine/escalationEngine'
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -10,13 +10,27 @@ import { CLOCK_SPEED, type Country, type Strike } from '../engine/escalationEngi
 const KM_TO_GLOBE_DEGREES = 1 / 111
 
 /**
- * How long (in simulation-seconds) blast rings remain on the globe before
- * being cleaned up.  At 2× clock speed this is 10 real seconds.
+ * How long (in real milliseconds) blast rings stay visible before being removed.
  * Prevents rings from accumulating forever and thrashing the GPU.
  */
-const RING_LIFETIME_SIM_SECONDS = 20
+const RING_LIFETIME_MS = 18000
 
-/** Fraction of the arc length occupied by the "warhead head" trail */
+/**
+ * How long (in real milliseconds) persistent tracer trails stay visible after
+ * a missile impacts.  Trails accumulate on screen creating the dense Plan-A
+ * blue-vs-red spray, then slowly fade out.
+ */
+const TRAIL_LIFETIME_MS = 55000
+
+/**
+ * Maximum number of missiles that get the expensive animated "warhead head"
+ * effect at any one time.  Beyond this cap, additional in-flight missiles
+ * show only a static trail (cheap to render) so frame rate stays smooth even
+ * with hundreds of simultaneous trajectories.
+ */
+const MAX_ANIMATED_HEADS = 40
+
+/** Fraction of the arc length occupied by the animated "warhead head" dash */
 const ARC_DASH_LENGTH = 0.04
 const ARC_DASH_GAP = 1 - ARC_DASH_LENGTH
 
@@ -32,11 +46,8 @@ interface GlobeProps {
   /** Strikes that have already impacted (pre-filtered by App) */
   completedStrikes: Strike[]
   countries: Country[]
-  // Note: currentTime is intentionally NOT passed here.
-  // Arc animation is driven by react-globe.gl's built-in CSS animation
-  // (arcDashAnimateTime), and ring cleanup is managed via setTimeout.
-  // This decouples Globe from the 100ms tick loop, preventing unnecessary
-  // re-renders and keeping arc animations smooth.
+  /** Current playback speed multiplier (2 / 4 / 8 / 16) */
+  clockSpeed: number
 }
 
 interface ArcDatum {
@@ -114,6 +125,24 @@ function computeArcAltitude(
   return Math.min(0.55, Math.max(0.2, distDeg / 160))
 }
 
+/**
+ * Returns the display color for a strike based on which side launched it.
+ * Attacker (first-strike) = alert red/orange; Defender (retaliating) = blue/cyan.
+ * This mirrors the Plan A reference: red spray vs. blue spray.
+ */
+function strikeColor(side: Strike['side']): string {
+  return side === 'attacker' ? '#ff4b3e' : '#5db4ff'
+}
+
+/**
+ * Dimmed trail variant of the same color, used for the persistent glow lines.
+ */
+function trailColor(side: Strike['side']): string {
+  return side === 'attacker'
+    ? 'rgba(255, 75, 62, 0.38)'
+    : 'rgba(93, 180, 255, 0.38)'
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Component
 // ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +153,7 @@ export default function Globe({
   activeStrikes,
   completedStrikes,
   countries,
+  clockSpeed,
 }: GlobeProps) {
   // Lazy-loaded because react-globe.gl is large and contains top-level await
   const [GlobeRenderer, setGlobeRenderer] = useState<ComponentType<any> | null>(null)
@@ -190,15 +220,23 @@ export default function Globe({
     [countries],
   )
 
-  // ── ARC CACHE ─────────────────────────────────────────────────────────────
-  // Each arc datum object is created ONCE and never mutated.  This matters
-  // because react-globe.gl drives arc animation via a CSS animation that
-  // restarts whenever the datum object reference changes.  By preserving the
-  // same object for the lifetime of the strike, the animated warhead head
-  // continues its flight smoothly across re-renders.
+  // ── ARC CACHE (animated "warhead heads") ──────────────────────────────────
+  // Each arc datum object is created ONCE and never mutated while the strike
+  // is in flight, so the CSS animation continues smoothly across re-renders.
+  // The cache is cleared when clockSpeed changes because dashAnimateTime is
+  // baked in — at a new speed, animations restart from scratch which is the
+  // correct behaviour (the user changed speed deliberately).
   const arcCacheRef = useRef<Map<string, ArcDatum>>(new Map())
+  const prevClockSpeedRef = useRef(clockSpeed)
 
   const arcsData: ArcDatum[] = useMemo(() => {
+    // If speed changed, clear the cache so all arcs are recreated with the new
+    // dashAnimateTime (i.e. animations restart at the new rate).
+    if (prevClockSpeedRef.current !== clockSpeed) {
+      arcCacheRef.current.clear()
+      prevClockSpeedRef.current = clockSpeed
+    }
+
     const activeIds = new Set(activeStrikes.map((s) => s.id))
 
     // Prune arcs for strikes that have landed or been cancelled
@@ -206,16 +244,25 @@ export default function Globe({
       if (!activeIds.has(id)) arcCacheRef.current.delete(id)
     }
 
+    // The newest MAX_ANIMATED_HEADS active strikes get the moving warhead head.
+    // Older in-flight strikes (beyond the cap) are handled by the trail layer
+    // instead, keeping the renderer load bounded even during large salvos.
+    const animatedIds = new Set(
+      [...activeStrikes]
+        .sort((a, b) => b.launchTime - a.launchTime)
+        .slice(0, MAX_ANIMATED_HEADS)
+        .map((s) => s.id),
+    )
+
     // Create arc datums for newly launched strikes (skip existing ones)
     for (const strike of activeStrikes) {
+      if (!animatedIds.has(strike.id)) continue  // beyond cap — handled by trail layer
       if (arcCacheRef.current.has(strike.id)) continue // preserve to keep animation
 
       const launch = countriesById.get(strike.aggressorId)
       const target = countriesById.get(strike.targetId)
       if (!launch || !target) continue
 
-      // Fan-out jitter prevents z-fighting when multiple warheads share the
-      // same source/target centroid
       const [jLLat, jLLng] = computeJitter(strike.id, 'launch')
       const [jILat, jILng] = computeJitter(strike.id, 'impact')
 
@@ -224,19 +271,16 @@ export default function Globe({
       const eLat = target.lat + jILat
       const eLng = target.lng + jILng
 
-      // Odd waves = aggressor (alert red); even waves = retaliating side (phosphor green)
-      const color = strike.wave % 2 === 1 ? '#ff4b3e' : '#3dff9a'
-
       // The dash animates along the full arc in exactly one flight time
-      // (converted from sim-seconds to real milliseconds at the 2× clock rate)
-      const dashAnimateTime = (strike.flightTime / CLOCK_SPEED) * 1000
+      // (converted from sim-seconds to real milliseconds at the current speed)
+      const dashAnimateTime = (strike.flightTime / clockSpeed) * 1000
 
       arcCacheRef.current.set(strike.id, {
         startLat: sLat,
         startLng: sLng,
         endLat: eLat,
         endLng: eLng,
-        color,
+        color: strikeColor(strike.side),
         altitude: computeArcAltitude(sLat, sLng, eLat, eLng),
         dashLength: ARC_DASH_LENGTH,
         dashGap: ARC_DASH_GAP,
@@ -244,20 +288,118 @@ export default function Globe({
       })
     }
 
+    // Remove arcs for strikes that are no longer animated (gone from activeIds or cap)
+    for (const id of arcCacheRef.current.keys()) {
+      if (!animatedIds.has(id)) arcCacheRef.current.delete(id)
+    }
+
     return Array.from(arcCacheRef.current.values())
-  }, [activeStrikes, countriesById])
+  }, [activeStrikes, countriesById, clockSpeed])
+
+  // ── TRAIL ARCS (persistent full-arc lines) ────────────────────────────────
+  // Completed strikes leave a static glowing tracer that remains visible for
+  // TRAIL_LIFETIME_MS so the screen accumulates the dense Plan-A spray.
+  // Active strikes beyond MAX_ANIMATED_HEADS also show as static trails
+  // (performance fallback so 200+ in-flight missiles don't thrash the GPU).
+  const trailMapRef = useRef<Map<string, ArcDatum>>(new Map())
+  const trailTimersRef = useRef<Map<string, number>>(new Map())
+  const [trailsData, setTrailsData] = useState<ArcDatum[]>([])
+
+  useEffect(() => {
+    // Strikes to show as static trails:
+    //   1. Completed strikes (all of them)
+    //   2. Active strikes whose animated head is capped out
+    const activeIds = new Set(activeStrikes.map((s) => s.id))
+    const animatedIds = new Set(
+      [...activeStrikes]
+        .sort((a, b) => b.launchTime - a.launchTime)
+        .slice(0, MAX_ANIMATED_HEADS)
+        .map((s) => s.id),
+    )
+    const trailCandidates = [
+      ...completedStrikes,
+      ...activeStrikes.filter((s) => !animatedIds.has(s.id)),
+    ]
+
+    let changed = false
+
+    for (const strike of trailCandidates) {
+      if (trailMapRef.current.has(strike.id)) continue // already registered
+
+      const launch = countriesById.get(strike.aggressorId)
+      const target = countriesById.get(strike.targetId)
+      if (!launch || !target) continue
+
+      const [jLLat, jLLng] = computeJitter(strike.id, 'launch')
+      const [jILat, jILng] = computeJitter(strike.id, 'impact')
+
+      const sLat = launch.lat + jLLat
+      const sLng = launch.lng + jLLng
+      const eLat = target.lat + jILat
+      const eLng = target.lng + jILng
+
+      // Static full arc — dashLength=1 means the whole arc is always visible
+      trailMapRef.current.set(strike.id, {
+        startLat: sLat,
+        startLng: sLng,
+        endLat: eLat,
+        endLng: eLng,
+        color: trailColor(strike.side),
+        altitude: computeArcAltitude(sLat, sLng, eLat, eLng),
+        dashLength: 1,
+        dashGap: 0,
+        dashAnimateTime: 0, // no animation — static line
+      })
+      changed = true
+
+      // Schedule cleanup so trails fade away and don't accumulate forever.
+      // Trails for still-active strikes get restarted if the strike completes.
+      const timerId = window.setTimeout(() => {
+        trailMapRef.current.delete(strike.id)
+        trailTimersRef.current.delete(strike.id)
+        setTrailsData(Array.from(trailMapRef.current.values()))
+      }, TRAIL_LIFETIME_MS)
+
+      trailTimersRef.current.set(strike.id, timerId)
+    }
+
+    // Clean up trail entries for strikes that are no longer in either list
+    // (shouldn't normally happen, but keeps the map tidy)
+    for (const id of trailMapRef.current.keys()) {
+      const isCompleted = completedStrikes.some((s) => s.id === id)
+      const isActiveTrail = activeIds.has(id) && !animatedIds.has(id)
+      if (!isCompleted && !isActiveTrail) {
+        const timer = trailTimersRef.current.get(id)
+        if (timer) {
+          window.clearTimeout(timer)
+          trailTimersRef.current.delete(id)
+        }
+        trailMapRef.current.delete(id)
+        changed = true
+      }
+    }
+
+    if (changed) {
+      setTrailsData(Array.from(trailMapRef.current.values()))
+    }
+  }, [activeStrikes, completedStrikes, countriesById])
+
+  // Clear all timers when Globe unmounts (e.g. on reset)
+  useEffect(() => {
+    return () => {
+      trailTimersRef.current.forEach((id) => window.clearTimeout(id))
+      ringTimersRef.current.forEach((id) => window.clearTimeout(id))
+    }
+  }, [])
 
   // ── RING LIFECYCLE ────────────────────────────────────────────────────────
   // Blast rings are added when a strike completes and automatically removed
-  // after RING_LIFETIME_SIM_SECONDS of sim-time (RING_LIFETIME_SIM_SECONDS /
-  // CLOCK_SPEED real seconds).  This prevents the rings from accumulating
-  // indefinitely and thrashing the GPU.
+  // after RING_LIFETIME_MS of real time.
   const ringMapRef = useRef<Map<string, RingDatum[]>>(new Map())
   const ringTimersRef = useRef<Map<string, number>>(new Map())
   const [ringsData, setRingsData] = useState<RingDatum[]>([])
 
   useEffect(() => {
-    const lifetimeMs = (RING_LIFETIME_SIM_SECONDS / CLOCK_SPEED) * 1000
     let addedNew = false
 
     for (const strike of completedStrikes) {
@@ -285,7 +427,7 @@ export default function Globe({
         ringMapRef.current.delete(strike.id)
         ringTimersRef.current.delete(strike.id)
         setRingsData(Array.from(ringMapRef.current.values()).flat())
-      }, lifetimeMs)
+      }, RING_LIFETIME_MS)
 
       ringTimersRef.current.set(strike.id, timerId)
     }
@@ -294,13 +436,6 @@ export default function Globe({
       setRingsData(Array.from(ringMapRef.current.values()).flat())
     }
   }, [completedStrikes, countriesById])
-
-  // Clear all ring timers when Globe unmounts (e.g. on reset)
-  useEffect(() => {
-    return () => {
-      ringTimersRef.current.forEach((id) => window.clearTimeout(id))
-    }
-  }, [])
 
   // ── COUNTRY MARKERS ───────────────────────────────────────────────────────
   const pointsData: PointDatum[] = useMemo(() => {
@@ -318,11 +453,17 @@ export default function Globe({
   }, [aggressorId, countriesById, targetId])
 
   // ── COUNTRY LABELS ────────────────────────────────────────────────────────
-  // Small phosphor-green labels floating near each country centroid give the
-  // globe a tactical intelligence-display feel.
   const labelsData: LabelDatum[] = useMemo(
     () => countries.map((c) => ({ lat: c.lat, lng: c.lng, text: c.name.toUpperCase() })),
     [countries],
+  )
+
+  // ── Combined arcs: animated heads + static trails ─────────────────────────
+  // react-globe.gl renders a single arcsData array; we merge both layers here.
+  // Trail arcs come first (drawn underneath), animated heads on top.
+  const allArcsData = useMemo(
+    () => [...trailsData, ...arcsData],
+    [trailsData, arcsData],
   )
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -357,27 +498,24 @@ export default function Globe({
           labelResolution={1}
           // ── Missile trajectory arcs ───────────────────────────────────
           //
-          // Each arc uses react-globe.gl's built-in CSS animation
-          // (arcDashAnimateTime) so the moving "warhead head" runs at a
-          // smooth 60 fps rather than being jerked forward every 100ms by
-          // React state updates.
-          //
-          // The arc datum object is created once (see arcCacheRef above) and
-          // never re-created while the strike is in flight, so the animation
-          // starts at the launch point and never restarts mid-flight.
-          arcsData={arcsData}
+          // Combined layer: dim static trails (completed/capped) + bright
+          // animated warhead heads (newest in-flight strikes, up to
+          // MAX_ANIMATED_HEADS).  Trail arcs use dashLength=1/dashGap=0
+          // so they are always fully visible.  Animated head arcs use
+          // dashLength=0.04 and are driven by arcDashAnimateTime.
+          arcsData={allArcsData}
           arcColor="color"
           arcAltitude="altitude"
           arcDashLength="dashLength"
           arcDashGap="dashGap"
           arcDashAnimateTime="dashAnimateTime"
           arcDashInitialGap={0}
-          arcStroke={null}   // null = render as 3D tube (default; looks more cinematic)
+          arcStroke={null}   // null = render as 3D tube (cinematic look)
           // ── Blast rings ───────────────────────────────────────────────
           //
-          // ringRepeatPeriod is set very high so each ring expands only once
-          // and then sits invisible.  The setTimeout in the ring effect above
-          // removes the datum before the second cycle could ever play.
+          // ringRepeatPeriod is set very high so each ring expands only once.
+          // The setTimeout in the ring effect removes the datum before the
+          // second cycle could ever play.
           ringsData={ringsData}
           ringColor="color"
           ringMaxRadius="maxRadius"

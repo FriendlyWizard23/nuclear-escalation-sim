@@ -1,5 +1,7 @@
 import { estimateCasualties } from './casualtyModel'
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+
 export interface Country {
   id: string
   name: string
@@ -23,12 +25,15 @@ export interface AllianceDefinition {
   members: string[]
   nuclearMembers: string[]
   description: string
+  _comment?: string
 }
 
 export interface AllianceMap {
   _comment?: string
   NATO?: AllianceDefinition
   CSTO?: AllianceDefinition
+  WesternBloc?: AllianceDefinition
+  EasternBloc?: AllianceDefinition
   bilateral?: Record<string, AllianceDefinition>
 }
 
@@ -41,6 +46,8 @@ export interface Strike {
   flightTime: number
   impactTime: number
   wave: number
+  /** Which side launched this strike: 'attacker' = first-strike bloc, 'defender' = retaliating bloc */
+  side: 'attacker' | 'defender'
 }
 
 export interface EscalationEvent {
@@ -61,22 +68,31 @@ export interface SimulationState {
   isComplete: boolean
 }
 
-export const MAX_WAVES = 4
-export const MAX_TOTAL_STRIKES = 60  // raised from 30 – allows dramatic Russia↔US exchanges
-export const FLIGHT_TIME_PER_KM = 0.005
-export const CLOCK_SPEED = 2
+// ── Constants ─────────────────────────────────────────────────────────────────
 
-const LAUNCH_STAGGER_SECONDS = 45
+export const MAX_WAVES = 6          // allow deeper escalation for full-bloc scenarios
+export const MAX_TOTAL_STRIKES = 200 // raised for Plan-A-scale density (~200 trajectories)
+export const FLIGHT_TIME_PER_KM = 0.005
+export const CLOCK_SPEED = 2        // default speed; overrideable via UI speed selector
+
+/**
+ * Near-zero stagger between missiles in the same wave salvo.
+ * A tiny 1-second spread prevents exact overlap of launch times while still
+ * looking like a simultaneous fan — much closer to real ICBM salvo doctrine
+ * than the old 45-second one-at-a-time stagger.
+ */
+const LAUNCH_STAGGER_SECONDS = 1
 const DECISION_DELAY_SECONDS = 60
 
 type Side = 'attackers' | 'defenders'
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function getArsenal(countryId: string, arsenals: ArsenalMap): ArsenalEntry | null {
   const entry = arsenals[countryId]
   if (!entry || typeof entry === 'string') {
     return null
   }
-
   return entry
 }
 
@@ -84,6 +100,8 @@ function getCoalition(countryId: string, alliances: AllianceMap, arsenals: Arsen
   const members = new Set<string>([countryId])
   const nuclearMembers = new Set<string>()
 
+  // Walk every top-level alliance (NATO, CSTO, WesternBloc, EasternBloc…) and
+  // add the country to any bloc it belongs to.
   const allianceEntries = Object.entries(alliances).filter(
     ([key, value]) => key !== '_comment' && key !== 'bilateral' && value,
   ) as Array<[string, AllianceDefinition]>
@@ -95,6 +113,7 @@ function getCoalition(countryId: string, alliances: AllianceMap, arsenals: Arsen
     }
   }
 
+  // Also walk bilateral relationships
   for (const alliance of Object.values(alliances.bilateral ?? {})) {
     if (alliance.members.includes(countryId)) {
       alliance.members.forEach((member) => members.add(member))
@@ -102,6 +121,7 @@ function getCoalition(countryId: string, alliances: AllianceMap, arsenals: Arsen
     }
   }
 
+  // Ensure the country itself is in nuclearMembers if it has nukes
   if (getArsenal(countryId, arsenals)?.hasNukes) {
     nuclearMembers.add(countryId)
   }
@@ -129,31 +149,40 @@ function haversineKm(a: Country, b: Country) {
   return earthRadiusKm * c
 }
 
+/**
+ * Number of warheads a country fires in wave 1 (first strike).
+ * Scales with deployed arsenal so Russia/US send many and North Korea sends very few.
+ */
 function getInitialStrikeCount(arsenal: ArsenalEntry | null) {
   if (!arsenal) {
     return 0
   }
 
+  // Use deployed warheads if available; fall back to 10 % of total stockpile
   const available =
-    arsenal.deployedWarheads > 0 ? arsenal.deployedWarheads : Math.max(1, Math.round(arsenal.warheads * 0.05))
+    arsenal.deployedWarheads > 0 ? arsenal.deployedWarheads : Math.max(1, Math.round(arsenal.warheads * 0.1))
 
-  // Scale missiles to arsenal size so Russia/US send many, North Korea sends few.
-  // Dividing by 80 gives: Russia(~1600) → 20 → capped at 15; NK(~2) → 1.
+  // Divide by 80: Russia(~1588)→~20, US(~1700)→~21, UK(~120)→1, NK(~4)→1
   const scaled = Math.max(1, Math.round(available / 80))
-  return Math.min(available, 15, scaled)
+  return Math.min(available, 25, scaled) // hard cap at 25 per launcher per wave
 }
 
+/**
+ * Number of warheads a country fires in waves 2+ (retaliation / counter-retaliation).
+ * Slightly lower than the initial salvo but still proportional to arsenal size.
+ */
 function getRetaliationStrikeCount(arsenal: ArsenalEntry | null) {
   if (!arsenal || !arsenal.hasNukes) {
     return 0
   }
 
   if (arsenal.deployedWarheads > 0) {
-    // Raise cap from 5 → 10 to allow larger retaliatory salvos from major powers
-    return Math.max(1, Math.min(10, Math.round(arsenal.deployedWarheads / 20)))
+    // Russia/US → ~15, China → ~5, UK → 1-2, France → 3-4
+    return Math.max(1, Math.min(15, Math.round(arsenal.deployedWarheads / 80)))
   }
 
-  return 1
+  // States with no deployed warheads (India, Pakistan, NK, Israel) — small retaliatory salvo
+  return Math.max(1, Math.min(3, Math.round(arsenal.warheads / 50)))
 }
 
 function createStrike(
@@ -163,6 +192,7 @@ function createStrike(
   wave: number,
   launchTime: number,
   index: number,
+  side: 'attacker' | 'defender',
 ): Strike {
   const flightTime = haversineKm(aggressor, target) * FLIGHT_TIME_PER_KM
   const yield_kt = arsenal.yields_kt[index % arsenal.yields_kt.length]
@@ -176,6 +206,7 @@ function createStrike(
     flightTime,
     impactTime: launchTime + flightTime,
     wave,
+    side,
   }
 }
 
@@ -205,6 +236,7 @@ function buildWave(
   const strikes: Strike[] = []
   const launchers: string[] = []
   const validTargets = targetPool.filter((targetId) => countriesById.has(targetId))
+  const strikeSide: 'attacker' | 'defender' = side === 'attackers' ? 'attacker' : 'defender'
 
   if (validTargets.length === 0 || remainingStrikeBudget <= 0) {
     return { strikes, launchers }
@@ -230,6 +262,7 @@ function buildWave(
     launchers.push(actorId)
 
     for (let i = 0; i < requestedCount && strikes.length < remainingStrikeBudget; i += 1) {
+      // Distribute targets across the pool so missiles fan out to different countries
       const targetId = validTargets[(launchers.length + i - 1) % validTargets.length]
       const target = countriesById.get(targetId)
       if (!target) {
@@ -242,8 +275,10 @@ function buildWave(
           target,
           arsenal,
           wave,
+          // Tiny 1-second stagger between missiles in the same salvo — near-simultaneous
           launchBaseTime + strikes.length * LAUNCH_STAGGER_SECONDS,
           i,
+          strikeSide,
         ),
       )
     }
@@ -251,6 +286,8 @@ function buildWave(
 
   return { strikes, launchers, side }
 }
+
+// ── Main export ───────────────────────────────────────────────────────────────
 
 export function buildSimulation(
   aggressorId: string,
@@ -279,6 +316,8 @@ export function buildSimulation(
     }
   }
 
+  // Build full coalition membership for each side — includes the whole bloc
+  // (NATO + WesternBloc, or CSTO + EasternBloc) so every nuclear member retaliates.
   const aggressorCoalition = getCoalition(aggressorId, alliances, arsenals)
   const targetCoalition = getCoalition(targetId, alliances, arsenals)
   const aggressorArsenal = getArsenal(aggressorId, arsenals)
@@ -293,14 +332,14 @@ export function buildSimulation(
 
   let remainingStrikeBudget = MAX_TOTAL_STRIKES
   let previousWaveImpactTime = 0
-  let previousWaveLaunchers: string[] = []
 
+  // ── Wave 1: initial aggressor salvo ───────────────────────────────────────
   const firstWaveActors = aggressorArsenal?.hasNukes ? [aggressorId] : []
   const firstWave = buildWave(
     1,
     'attackers',
     firstWaveActors,
-    [targetId],
+    [targetId], // Wave 1 focuses on the designated target country
     countriesById,
     arsenals,
     remainingStrikeBudget,
@@ -309,26 +348,33 @@ export function buildSimulation(
 
   strikes.push(...firstWave.strikes)
   remainingStrikeBudget -= firstWave.strikes.length
-  previousWaveLaunchers = firstWave.launchers
   previousWaveImpactTime = firstWave.strikes.length
     ? Math.max(...firstWave.strikes.map((strike) => strike.impactTime))
     : 0
 
+  // ── Waves 2 – MAX_WAVES: full-bloc escalation ─────────────────────────────
+  // Each side brings in ALL nuclear members of their bloc — not just the
+  // directly attacked or attacking country.  This produces the full-globe
+  // spray of the Plan A reference.
   for (let wave = 2; wave <= MAX_WAVES && remainingStrikeBudget > 0; wave += 1) {
     const actingSide: Side = wave % 2 === 0 ? 'defenders' : 'attackers'
-    const coalition = actingSide === 'defenders' ? targetCoalition : aggressorCoalition
-    const actorCandidates = coalition.nuclearMembers.filter((memberId) => countriesById.has(memberId))
+
+    // Who is launching this wave?
+    const actingCoalition = actingSide === 'defenders' ? targetCoalition : aggressorCoalition
+    const actorCandidates = actingCoalition.nuclearMembers.filter((memberId) => countriesById.has(memberId))
 
     if (actorCandidates.length === 0) {
       break
     }
 
-    const targetPool =
-      actingSide === 'defenders'
-        ? [aggressorId]
-        : previousWaveLaunchers.length > 0
-          ? previousWaveLaunchers
-          : [targetId]
+    // Who are they targeting? — the full opposing nuclear bloc, not just the
+    // original aggressor/target, so strikes fan out across the whole globe.
+    const opposingCoalition = actingSide === 'defenders' ? aggressorCoalition : targetCoalition
+    const targetPool = opposingCoalition.nuclearMembers.filter((memberId) => countriesById.has(memberId))
+
+    if (targetPool.length === 0) {
+      break
+    }
 
     const decisionTime = previousWaveImpactTime + DECISION_DELAY_SECONDS
     events.push({
@@ -336,8 +382,8 @@ export function buildSimulation(
       type: 'retaliation_decision',
       message:
         actingSide === 'defenders'
-          ? `Wave ${wave}: target coalition authorizes retaliatory launches.`
-          : `Wave ${wave}: aggressor coalition prepares counter-retaliation.`,
+          ? `Wave ${wave}: ${actorCandidates.join(', ')} authorize retaliatory launches.`
+          : `Wave ${wave}: ${actorCandidates.join(', ')} prepare counter-retaliation.`,
     })
 
     const waveResult = buildWave(
@@ -348,7 +394,7 @@ export function buildSimulation(
       countriesById,
       arsenals,
       remainingStrikeBudget,
-      decisionTime + 15,
+      decisionTime + 15, // 15-second window between decision and launch
     )
 
     if (waveResult.strikes.length === 0) {
@@ -357,10 +403,10 @@ export function buildSimulation(
 
     strikes.push(...waveResult.strikes)
     remainingStrikeBudget -= waveResult.strikes.length
-    previousWaveLaunchers = waveResult.launchers
     previousWaveImpactTime = Math.max(...waveResult.strikes.map((strike) => strike.impactTime))
   }
 
+  // ── Build launch / impact events for each strike ──────────────────────────
   for (const strike of strikes) {
     const aggressorCountry = countriesById.get(strike.aggressorId)
     const targetCountry = countriesById.get(strike.targetId)
