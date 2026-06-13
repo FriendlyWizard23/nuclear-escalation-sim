@@ -384,14 +384,6 @@ export default function Globe({
     }
   }, [activeStrikes, completedStrikes, countriesById])
 
-  // Clear all timers when Globe unmounts (e.g. on reset)
-  useEffect(() => {
-    return () => {
-      trailTimersRef.current.forEach((id) => window.clearTimeout(id))
-      ringTimersRef.current.forEach((id) => window.clearTimeout(id))
-    }
-  }, [])
-
   // ── RING LIFECYCLE ────────────────────────────────────────────────────────
   // Blast rings are added when a strike completes and automatically removed
   // after RING_LIFETIME_MS of real time.
@@ -436,6 +428,15 @@ export default function Globe({
       setRingsData(Array.from(ringMapRef.current.values()).flat())
     }
   }, [completedStrikes, countriesById])
+
+  // Clear all timers when Globe unmounts (e.g. on reset).
+  // Placed after both timer refs are declared so there's no TDZ issue.
+  useEffect(() => {
+    return () => {
+      trailTimersRef.current.forEach((id) => window.clearTimeout(id))
+      ringTimersRef.current.forEach((id) => window.clearTimeout(id))
+    }
+  }, [])
 
   // ── COUNTRY MARKERS ───────────────────────────────────────────────────────
   const pointsData: PointDatum[] = useMemo(() => {
