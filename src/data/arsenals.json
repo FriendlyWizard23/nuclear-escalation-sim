@@ -1,0 +1,66 @@
+{
+  "_comment": "All figures are public estimates from SIPRI Yearbook 2023 and Federation of American Scientists. Not operational data.",
+  "US": {
+    "warheads": 5500,
+    "deployedWarheads": 1700,
+    "yields_kt": [100, 300, 455, 1200],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~5,500 total, ~1,700 deployed"
+  },
+  "Russia": {
+    "warheads": 6257,
+    "deployedWarheads": 1588,
+    "yields_kt": [100, 500, 800, 1600],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~6,257 total, ~1,588 deployed"
+  },
+  "China": {
+    "warheads": 410,
+    "deployedWarheads": 410,
+    "yields_kt": [200, 330, 1000],
+    "hasNukes": true,
+    "note": "FAS 2023 estimate: ~410 total"
+  },
+  "UK": {
+    "warheads": 225,
+    "deployedWarheads": 120,
+    "yields_kt": [100],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~225 total, ~120 operational"
+  },
+  "France": {
+    "warheads": 290,
+    "deployedWarheads": 280,
+    "yields_kt": [100, 300],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~290 total"
+  },
+  "India": {
+    "warheads": 164,
+    "deployedWarheads": 0,
+    "yields_kt": [15, 45],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~164 total, not on alert"
+  },
+  "Pakistan": {
+    "warheads": 170,
+    "deployedWarheads": 0,
+    "yields_kt": [10, 40],
+    "hasNukes": true,
+    "note": "SIPRI 2023 estimate: ~170 total"
+  },
+  "NorthKorea": {
+    "warheads": 40,
+    "deployedWarheads": 0,
+    "yields_kt": [10, 50],
+    "hasNukes": true,
+    "note": "FAS 2023 estimate: ~40, uncertain"
+  },
+  "Israel": {
+    "warheads": 90,
+    "deployedWarheads": 0,
+    "yields_kt": [20],
+    "hasNukes": true,
+    "note": "FAS 2023 estimate: ~90, undeclared/ambiguous policy"
+  }
+}

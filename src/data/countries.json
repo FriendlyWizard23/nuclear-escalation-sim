@@ -1,0 +1,154 @@
+[
+  {
+    "id": "US",
+    "name": "United States",
+    "lat": 38.9,
+    "lng": -100.0,
+    "population": 331000000,
+    "populationDensity": 36
+  },
+  {
+    "id": "Russia",
+    "name": "Russia",
+    "lat": 61.5,
+    "lng": 90.0,
+    "population": 144000000,
+    "populationDensity": 9
+  },
+  {
+    "id": "China",
+    "name": "China",
+    "lat": 35.9,
+    "lng": 104.2,
+    "population": 1411000000,
+    "populationDensity": 153
+  },
+  {
+    "id": "UK",
+    "name": "United Kingdom",
+    "lat": 55.4,
+    "lng": -3.4,
+    "population": 67000000,
+    "populationDensity": 275
+  },
+  {
+    "id": "France",
+    "name": "France",
+    "lat": 46.2,
+    "lng": 2.2,
+    "population": 67000000,
+    "populationDensity": 123
+  },
+  {
+    "id": "India",
+    "name": "India",
+    "lat": 20.6,
+    "lng": 78.9,
+    "population": 1393000000,
+    "populationDensity": 464
+  },
+  {
+    "id": "Pakistan",
+    "name": "Pakistan",
+    "lat": 30.4,
+    "lng": 69.3,
+    "population": 220000000,
+    "populationDensity": 287
+  },
+  {
+    "id": "NorthKorea",
+    "name": "North Korea",
+    "lat": 40.3,
+    "lng": 127.5,
+    "population": 25000000,
+    "populationDensity": 212
+  },
+  {
+    "id": "Israel",
+    "name": "Israel",
+    "lat": 31.0,
+    "lng": 35.0,
+    "population": 9000000,
+    "populationDensity": 400
+  },
+  {
+    "id": "Italy",
+    "name": "Italy",
+    "lat": 41.9,
+    "lng": 12.6,
+    "population": 60000000,
+    "populationDensity": 206
+  },
+  {
+    "id": "Germany",
+    "name": "Germany",
+    "lat": 51.2,
+    "lng": 10.5,
+    "population": 83000000,
+    "populationDensity": 240
+  },
+  {
+    "id": "Poland",
+    "name": "Poland",
+    "lat": 51.9,
+    "lng": 19.1,
+    "population": 38000000,
+    "populationDensity": 124
+  },
+  {
+    "id": "Japan",
+    "name": "Japan",
+    "lat": 36.2,
+    "lng": 138.3,
+    "population": 126000000,
+    "populationDensity": 347
+  },
+  {
+    "id": "SouthKorea",
+    "name": "South Korea",
+    "lat": 35.9,
+    "lng": 127.8,
+    "population": 51000000,
+    "populationDensity": 527
+  },
+  {
+    "id": "Ukraine",
+    "name": "Ukraine",
+    "lat": 49.0,
+    "lng": 31.5,
+    "population": 44000000,
+    "populationDensity": 77
+  },
+  {
+    "id": "Iran",
+    "name": "Iran",
+    "lat": 32.4,
+    "lng": 53.7,
+    "population": 85000000,
+    "populationDensity": 52
+  },
+  {
+    "id": "SaudiArabia",
+    "name": "Saudi Arabia",
+    "lat": 24.0,
+    "lng": 45.0,
+    "population": 35000000,
+    "populationDensity": 16
+  },
+  {
+    "id": "Turkey",
+    "name": "Turkey",
+    "lat": 38.9,
+    "lng": 35.2,
+    "population": 84000000,
+    "populationDensity": 110
+  },
+  {
+    "id": "Belarus",
+    "name": "Belarus",
+    "lat": 53.7,
+    "lng": 28.0,
+    "population": 9500000,
+    "populationDensity": 47
+  }
+]
