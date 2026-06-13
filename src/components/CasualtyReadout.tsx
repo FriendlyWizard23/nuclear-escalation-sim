@@ -1,5 +1,4 @@
 import { useMemo } from 'react'
-import { estimateCasualties } from '../engine/casualtyModel'
 import type { Country, Strike } from '../engine/escalationEngine'
 
 interface CasualtyReadoutProps {
@@ -10,35 +9,17 @@ interface CasualtyReadoutProps {
 const numberFormatter = new Intl.NumberFormat()
 
 export default function CasualtyReadout({ completedStrikes, countries }: CasualtyReadoutProps) {
-  const countriesById = useMemo(
-    () => new Map(countries.map((country) => [country.id, country])),
-    [countries],
-  )
-
-  const strikeImpacts = useMemo(
-    () =>
-      completedStrikes.map((strike) => {
-        const target = countriesById.get(strike.targetId)
-        const casualties = estimateCasualties(strike.yield_kt, target?.populationDensity ?? 0)
-        return {
-          strike,
-          targetName: target?.name ?? strike.targetId,
-          casualties,
-        }
-      }),
-    [completedStrikes, countriesById],
-  )
+  const countriesById = useMemo(() => new Map(countries.map((country) => [country.id, country.name])), [countries])
 
   const totals = useMemo(
-    () =>
-      strikeImpacts.reduce(
-        (accumulator, impact) => ({
-          killed: accumulator.killed + impact.casualties.killed,
-          injured: accumulator.injured + impact.casualties.injured,
-        }),
-        { killed: 0, injured: 0 },
-      ),
-    [strikeImpacts],
+    () => completedStrikes.reduce(
+      (accumulator, strike) => ({
+        killed: accumulator.killed + strike.estimatedKilled,
+        injured: accumulator.injured + strike.estimatedInjured,
+      }),
+      { killed: 0, injured: 0 },
+    ),
+    [completedStrikes],
   )
 
   return (
@@ -56,22 +37,22 @@ export default function CasualtyReadout({ completedStrikes, countries }: Casualt
       </div>
 
       <div className="impact-list">
-        {strikeImpacts.length === 0 ? (
-          <p className="muted">Impacts will appear here after detonations occur.</p>
+        {completedStrikes.length === 0 ? (
+          <p className="muted">Impacts will appear after detonations occur.</p>
         ) : (
-          [...strikeImpacts].reverse().map(({ strike, targetName, casualties }) => (
+          [...completedStrikes].reverse().map((strike) => (
             <div className="impact-item" key={strike.id}>
               <div>
                 <strong>
-                  {strike.aggressorId} → {targetName}
+                  {countriesById.get(strike.aggressorId) ?? strike.aggressorId} → {strike.targetCityName}
                 </strong>
                 <p>
-                  Wave {strike.wave} · {strike.yield_kt} kt heuristic estimate
+                  {strike.weaponName} {strike.weaponType} · {strike.yieldLabel} · blast radius ~{strike.blastRadiusKm.toFixed(1)} km
                 </p>
               </div>
               <div className="impact-stats">
-                <span>{numberFormatter.format(casualties.killed)} killed</span>
-                <span>{numberFormatter.format(casualties.injured)} injured</span>
+                <span>{numberFormatter.format(strike.estimatedKilled)} killed</span>
+                <span>{numberFormatter.format(strike.estimatedInjured)} injured</span>
               </div>
             </div>
           ))

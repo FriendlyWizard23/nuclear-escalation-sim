@@ -2,412 +2,415 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { getBlastRings } from '../engine/casualtyModel'
 import type { Country, Strike } from '../engine/escalationEngine'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Constants
-// ─────────────────────────────────────────────────────────────────────────────
-
-const KM_TO_DEGREES = 1 / 111
-
-/** How long (ms) blast rings stay before being removed */
-const RING_LIFETIME_MS = 18000
-
-/** How long (ms) completed-strike trail lines stay visible */
-const TRAIL_LIFETIME_MS = 55000
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Types
-// ─────────────────────────────────────────────────────────────────────────────
-
 interface FlatMapProps {
   aggressorId: string | null
   targetId: string | null
+  launchedStrikes: Strike[]
   activeStrikes: Strike[]
   completedStrikes: Strike[]
   countries: Country[]
+  currentTime: number
   clockSpeed: number
 }
 
 interface GeoFeature {
-  type: string
   geometry: {
     type: string
     coordinates: number[][][] | number[][][][]
   }
 }
 
-interface TrailEntry {
-  strike: Strike
-  startX: number
-  startY: number
-  endX: number
-  endY: number
+interface PanState {
+  x: number
+  y: number
 }
 
-interface RingEntry {
-  id: string
-  cx: number
-  cy: number
-  maxR: number // in SVG px
-  rings: Array<{ color: string; maxR: number }>
-}
+const WORLD_WIDTH = 360
+const WORLD_HEIGHT = 180
+const BLAST_ANIMATION_SECONDS = 12
+const ATTACKER_LINE = '#ff784a'
+const DEFENDER_LINE = '#9bc4ff'
+const COUNTRY_STROKE = 'rgba(119, 255, 176, 0.52)'
+const COUNTRY_FILL = 'rgba(6, 20, 14, 0.84)'
+const INCOMING_MARKER = '#fff170'
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ─────────────────────────────────────────────────────────────────────────────
-
-/** Simple equirectangular projection: maps lat/lng to SVG coordinates */
 function project(lat: number, lng: number, width: number, height: number): [number, number] {
   const x = ((lng + 180) / 360) * width
   const y = ((90 - lat) / 180) * height
   return [x, y]
 }
 
-/**
- * Deterministic jitter (same as Globe.tsx) so arc endpoints match the 3D view.
- */
-function computeJitter(strikeId: string, which: 'launch' | 'impact'): [number, number] {
-  let hash = 0
-  const seed = strikeId + which
-  for (let i = 0; i < seed.length; i++) {
-    hash = ((hash << 5) - hash) + seed.charCodeAt(i)
-    hash |= 0
-  }
-  const latOffset = ((hash & 0xff) - 128) / 128 * 0.75
-  const lngOffset = (((hash >> 8) & 0xff) - 128) / 128 * 0.75
-  return [latOffset, lngOffset]
-}
-
-/**
- * Converts a GeoJSON polygon ring (array of [lng, lat]) to an SVG path string.
- */
-function ringToPath(ring: number[][], width: number, height: number): string {
-  return ring
-    .map(([lng, lat], i) => {
+function ringToPath(ring: number[][], width: number, height: number) {
+  return `${ring
+    .map(([lng, lat], index) => {
       const [x, y] = project(lat, lng, width, height)
-      return i === 0 ? `M${x.toFixed(1)},${y.toFixed(1)}` : `L${x.toFixed(1)},${y.toFixed(1)}`
+      return `${index === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`
     })
-    .join(' ') + ' Z'
+    .join(' ')} Z`
 }
 
-/**
- * Returns the SVG quadratic Bézier path string for a missile arc.
- * The control point is lifted proportionally to the distance so long-range
- * ICBMs arc visibly higher than regional missiles.
- */
-function arcPath(
-  startX: number,
-  startY: number,
-  endX: number,
-  endY: number,
-  svgHeight: number,
-): string {
+function strikePalette(side: Strike['side']) {
+  return side === 'attacker'
+    ? { line: ATTACKER_LINE, glow: 'rgba(255, 120, 74, 0.25)' }
+    : { line: DEFENDER_LINE, glow: 'rgba(155, 196, 255, 0.22)' }
+}
+
+function getArcGeometry(startX: number, startY: number, endX: number, endY: number, height: number) {
   const midX = (startX + endX) / 2
   const midY = (startY + endY) / 2
   const dx = endX - startX
   const dy = endY - startY
-  const dist = Math.sqrt(dx * dx + dy * dy)
-  // Lift proportional to distance, capped at 25% of SVG height
-  const lift = Math.min(svgHeight * 0.25, dist * 0.35)
-  const cx = midX
-  const cy = midY - lift
-  return `M ${startX.toFixed(1)},${startY.toFixed(1)} Q ${cx.toFixed(1)},${cy.toFixed(1)} ${endX.toFixed(1)},${endY.toFixed(1)}`
+  const distance = Math.sqrt((dx ** 2) + (dy ** 2))
+  const lift = Math.min(height * 0.36, Math.max(22, distance * 0.42))
+  const controlX = midX
+  const controlY = midY - lift
+
+  return {
+    controlX,
+    controlY,
+    path: `M ${startX.toFixed(2)},${startY.toFixed(2)} Q ${controlX.toFixed(2)},${controlY.toFixed(2)} ${endX.toFixed(2)},${endY.toFixed(2)}`,
+  }
 }
 
-function strikeColor(side: Strike['side']): string {
-  return side === 'attacker' ? '#ff4b3e' : '#5db4ff'
+function getQuadraticPoint(
+  startX: number,
+  startY: number,
+  controlX: number,
+  controlY: number,
+  endX: number,
+  endY: number,
+  t: number,
+) {
+  const inverse = 1 - t
+  const x = (inverse ** 2 * startX) + (2 * inverse * t * controlX) + (t ** 2 * endX)
+  const y = (inverse ** 2 * startY) + (2 * inverse * t * controlY) + (t ** 2 * endY)
+  return { x, y }
 }
 
-function trailStrokeColor(side: Strike['side']): string {
-  return side === 'attacker' ? 'rgba(255,75,62,0.45)' : 'rgba(93,180,255,0.45)'
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value))
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Component
-// ─────────────────────────────────────────────────────────────────────────────
+function clampPan(pan: PanState, zoom: number, width: number, height: number) {
+  const xLimit = Math.max(0, (width * (zoom - 1)) + (width * 0.12))
+  const yLimit = Math.max(0, (height * (zoom - 1)) + (height * 0.12))
+
+  return {
+    x: clamp(pan.x, -xLimit, xLimit),
+    y: clamp(pan.y, -yLimit, yLimit),
+  }
+}
 
 export default function FlatMap({
   aggressorId,
   targetId,
+  launchedStrikes,
   activeStrikes,
   completedStrikes,
   countries,
-  clockSpeed: _clockSpeed, // available for future use (e.g. animation timing)
+  currentTime,
+  clockSpeed: _clockSpeed,
 }: FlatMapProps) {
   const containerRef = useRef<HTMLDivElement | null>(null)
+  const dragRef = useRef<{ pointerId: number; startX: number; startY: number; origin: PanState } | null>(null)
   const [dimensions, setDimensions] = useState({ width: window.innerWidth, height: window.innerHeight })
   const [countryPaths, setCountryPaths] = useState<string[]>([])
+  const [zoom, setZoom] = useState(1.2)
+  const [pan, setPan] = useState<PanState>({ x: -window.innerWidth * 0.08, y: 0 })
 
-  // ── Responsive sizing ──────────────────────────────────────────────────────
   useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    const update = () => setDimensions({ width: el.clientWidth, height: el.clientHeight })
-    update()
-    if (typeof ResizeObserver !== 'undefined') {
-      const ro = new ResizeObserver(update)
-      ro.observe(el)
-      return () => ro.disconnect()
+    const element = containerRef.current
+    if (!element) return
+
+    const updateSize = () => {
+      const nextWidth = element.clientWidth
+      const nextHeight = element.clientHeight
+      setDimensions({ width: nextWidth, height: nextHeight })
+      setPan((currentPan) => clampPan(currentPan, zoom, nextWidth, nextHeight))
     }
-    window.addEventListener('resize', update)
-    return () => window.removeEventListener('resize', update)
-  }, [])
+
+    updateSize()
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const observer = new ResizeObserver(updateSize)
+      observer.observe(element)
+      return () => observer.disconnect()
+    }
+
+    window.addEventListener('resize', updateSize)
+    return () => window.removeEventListener('resize', updateSize)
+  }, [zoom])
 
   const { width, height } = dimensions
 
-  // ── Load GeoJSON country borders ───────────────────────────────────────────
   useEffect(() => {
-    fetch(
-      'https://raw.githubusercontent.com/vasturiano/react-globe.gl/master/example/datasets/ne_110m_admin_0_countries.geojson',
-    )
-      .then((r) => r.json())
+    fetch('/world-countries.geojson')
+      .then((response) => response.json())
       .then((data) => {
         const paths: string[] = []
-        for (const feature of (data as any).features ?? []) {
-          const { type, coordinates } = feature.geometry as GeoFeature['geometry']
+        for (const feature of (data as { features?: GeoFeature[] }).features ?? []) {
+          const { type, coordinates } = feature.geometry
           if (type === 'Polygon') {
-            for (const ring of coordinates as number[][][]) {
-              paths.push(ringToPath(ring, width, height))
-            }
-          } else if (type === 'MultiPolygon') {
+            for (const ring of coordinates as number[][][]) paths.push(ringToPath(ring, width, height))
+          }
+          if (type === 'MultiPolygon') {
             for (const polygon of coordinates as number[][][][]) {
-              for (const ring of polygon) {
-                paths.push(ringToPath(ring, width, height))
-              }
+              for (const ring of polygon) paths.push(ringToPath(ring, width, height))
             }
           }
         }
         setCountryPaths(paths)
       })
-      .catch(() => { /* no borders — map still works */ })
-  // Re-project when dimensions change
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+      .catch(() => setCountryPaths([]))
   }, [width, height])
 
-  // ── Country lookup map ─────────────────────────────────────────────────────
-  const countriesById = useMemo(
-    () => new Map(countries.map((c) => [c.id, c])),
-    [countries],
+  const countriesById = useMemo(() => new Map(countries.map((country) => [country.id, country])), [countries])
+
+  const launchedArcData = useMemo(
+    () => launchedStrikes.map((strike) => {
+      const [startX, startY] = project(strike.launchLat, strike.launchLng, width, height)
+      const [endX, endY] = project(strike.targetLat, strike.targetLng, width, height)
+      return {
+        strike,
+        startX,
+        startY,
+        endX,
+        endY,
+        ...getArcGeometry(startX, startY, endX, endY, height),
+      }
+    }),
+    [height, launchedStrikes, width],
   )
 
-  // ── Active arc paths ───────────────────────────────────────────────────────
-  const activeArcPaths = useMemo(() => {
-    return activeStrikes.map((strike) => {
-      const launch = countriesById.get(strike.aggressorId)
-      const target = countriesById.get(strike.targetId)
-      if (!launch || !target) return null
+  const activeMarkers = useMemo(
+    () => activeStrikes.map((strike) => {
+      const arc = launchedArcData.find((entry) => entry.strike.id === strike.id)
+      if (!arc) return null
 
-      const [jLLat, jLLng] = computeJitter(strike.id, 'launch')
-      const [jILat, jILng] = computeJitter(strike.id, 'impact')
+      const progress = clamp((currentTime - strike.launchTime) / Math.max(strike.flightTime, 0.001), 0, 1)
+      const tailProgress = clamp(progress - 0.04, 0, 1)
+      const point = getQuadraticPoint(arc.startX, arc.startY, arc.controlX, arc.controlY, arc.endX, arc.endY, progress)
+      const tailPoint = getQuadraticPoint(arc.startX, arc.startY, arc.controlX, arc.controlY, arc.endX, arc.endY, tailProgress)
+      return { strike, point, tailPoint }
+    }).filter(Boolean) as Array<{ strike: Strike; point: { x: number; y: number }; tailPoint: { x: number; y: number } }>,
+    [activeStrikes, currentTime, launchedArcData],
+  )
 
-      const [sx, sy] = project(launch.lat + jLLat, launch.lng + jLLng, width, height)
-      const [ex, ey] = project(target.lat + jILat, target.lng + jILng, width, height)
-
+  const impactBlooms = useMemo(
+    () => completedStrikes.map((strike) => {
+      const [cx, cy] = project(strike.targetLat, strike.targetLng, width, height)
+      const rings = getBlastRings(strike.yield_kt)
+      const pixelsPerKm = width / 40075
+      const age = currentTime - strike.impactTime
+      const animationProgress = clamp(age / BLAST_ANIMATION_SECONDS, 0, 1)
       return {
-        id: strike.id,
-        d: arcPath(sx, sy, ex, ey, height),
-        color: strikeColor(strike.side),
-      }
-    }).filter(Boolean) as Array<{ id: string; d: string; color: string }>
-  }, [activeStrikes, countriesById, width, height])
-
-  // ── Persistent trail lines (completed strikes) ────────────────────────────
-  const trailMapRef = useRef<Map<string, TrailEntry>>(new Map())
-  const trailTimersRef = useRef<Map<string, number>>(new Map())
-  const [trails, setTrails] = useState<TrailEntry[]>([])
-
-  useEffect(() => {
-    let changed = false
-    for (const strike of completedStrikes) {
-      if (trailMapRef.current.has(strike.id)) continue
-
-      const launch = countriesById.get(strike.aggressorId)
-      const target = countriesById.get(strike.targetId)
-      if (!launch || !target) continue
-
-      const [jLLat, jLLng] = computeJitter(strike.id, 'launch')
-      const [jILat, jILng] = computeJitter(strike.id, 'impact')
-
-      const [sx, sy] = project(launch.lat + jLLat, launch.lng + jLLng, width, height)
-      const [ex, ey] = project(target.lat + jILat, target.lng + jILng, width, height)
-
-      trailMapRef.current.set(strike.id, { strike, startX: sx, startY: sy, endX: ex, endY: ey })
-      changed = true
-
-      const timerId = window.setTimeout(() => {
-        trailMapRef.current.delete(strike.id)
-        trailTimersRef.current.delete(strike.id)
-        setTrails(Array.from(trailMapRef.current.values()))
-      }, TRAIL_LIFETIME_MS)
-
-      trailTimersRef.current.set(strike.id, timerId)
-    }
-    if (changed) setTrails(Array.from(trailMapRef.current.values()))
-  }, [completedStrikes, countriesById, width, height])
-
-  // ── Blast rings ────────────────────────────────────────────────────────────
-  // Convert km radius to SVG pixels using a rough scale factor
-  const kmToPixels = (width / 360) * KM_TO_DEGREES * 111
-
-  const ringMapRef = useRef<Map<string, RingEntry>>(new Map())
-  const ringTimersRef = useRef<Map<string, number>>(new Map())
-  const [ringEntries, setRingEntries] = useState<RingEntry[]>([])
-
-  useEffect(() => {
-    let addedNew = false
-    for (const strike of completedStrikes) {
-      if (ringMapRef.current.has(strike.id)) continue
-
-      const target = countriesById.get(strike.targetId)
-      if (!target) continue
-
-      const [jLat, jLng] = computeJitter(strike.id, 'impact')
-      const [cx, cy] = project(target.lat + jLat, target.lng + jLng, width, height)
-
-      const blastRings = getBlastRings(strike.yield_kt)
-      const maxRingKm = blastRings[blastRings.length - 1]?.radius_km ?? 10
-
-      ringMapRef.current.set(strike.id, {
-        id: strike.id,
+        strike,
         cx,
         cy,
-        maxR: maxRingKm * kmToPixels,
-        rings: blastRings.map((r) => ({ color: r.color, maxR: r.radius_km * kmToPixels })),
-      })
-      addedNew = true
+        age,
+        scorchRadius: Math.max(3, strike.blastRadiusKm * pixelsPerKm),
+        animatedRings: rings.map((ring) => ({
+          color: ring.color,
+          opacity: ring.opacity,
+          radius: Math.max(2, ring.radius_km * pixelsPerKm),
+          animatedRadius: Math.max(2, ring.radius_km * pixelsPerKm * animationProgress),
+        })),
+      }
+    }),
+    [completedStrikes, currentTime, width],
+  )
 
-      const timerId = window.setTimeout(() => {
-        ringMapRef.current.delete(strike.id)
-        ringTimersRef.current.delete(strike.id)
-        setRingEntries(Array.from(ringMapRef.current.values()))
-      }, RING_LIFETIME_MS)
+  const highlightedCountries = useMemo(() => {
+    return [aggressorId, targetId]
+      .map((countryId) => (countryId ? countriesById.get(countryId) : null))
+      .filter(Boolean) as Country[]
+  }, [aggressorId, countriesById, targetId])
 
-      ringTimersRef.current.set(strike.id, timerId)
+  const handlePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: pan,
     }
-    if (addedNew) setRingEntries(Array.from(ringMapRef.current.values()))
-  }, [completedStrikes, countriesById, width, height, kmToPixels])
+    event.currentTarget.setPointerCapture(event.pointerId)
+  }
 
-  // Clear all timers on unmount
-  useEffect(() => {
-    return () => {
-      trailTimersRef.current.forEach((id) => window.clearTimeout(id))
-      ringTimersRef.current.forEach((id) => window.clearTimeout(id))
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (!dragRef.current || dragRef.current.pointerId !== event.pointerId) return
+
+    const nextPan = clampPan(
+      {
+        x: dragRef.current.origin.x + (event.clientX - dragRef.current.startX),
+        y: dragRef.current.origin.y + (event.clientY - dragRef.current.startY),
+      },
+      zoom,
+      width,
+      height,
+    )
+
+    setPan(nextPan)
+  }
+
+  const handlePointerUp = (event: React.PointerEvent<SVGSVGElement>) => {
+    if (dragRef.current?.pointerId === event.pointerId) {
+      dragRef.current = null
+      event.currentTarget.releasePointerCapture(event.pointerId)
     }
-  }, [])
+  }
 
-  // ── Country marker positions ───────────────────────────────────────────────
-  const aggressorPos = aggressorId ? countriesById.get(aggressorId) : null
-  const targetPos = targetId ? countriesById.get(targetId) : null
+  const handleWheel = (event: React.WheelEvent<SVGSVGElement>) => {
+    event.preventDefault()
 
-  // ─────────────────────────────────────────────────────────────────────────
-  // Render
-  // ─────────────────────────────────────────────────────────────────────────
+    const rect = event.currentTarget.getBoundingClientRect()
+    const cursorX = event.clientX - rect.left
+    const cursorY = event.clientY - rect.top
+    const nextZoom = clamp(zoom * (event.deltaY < 0 ? 1.12 : 0.9), 1, 7)
+
+    const worldX = (cursorX - pan.x) / zoom
+    const worldY = (cursorY - pan.y) / zoom
+    const nextPan = clampPan(
+      {
+        x: cursorX - (worldX * nextZoom),
+        y: cursorY - (worldY * nextZoom),
+      },
+      nextZoom,
+      width,
+      height,
+    )
+
+    setZoom(nextZoom)
+    setPan(nextPan)
+  }
+
   return (
     <div className="globe-container flatmap-container" ref={containerRef}>
       <svg
-        width={width}
+        aria-label="Flat world map showing persistent nuclear strike trajectories"
         height={height}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerLeave={handlePointerUp}
+        onWheel={handleWheel}
+        style={{ display: 'block', background: '#010204', cursor: dragRef.current ? 'grabbing' : 'grab', touchAction: 'none' }}
         viewBox={`0 0 ${width} ${height}`}
-        style={{ display: 'block', background: '#020509' }}
-        aria-label="Flat 2D world map showing nuclear strike trajectories"
+        width={width}
       >
-        {/* ── Ocean fill ─────────────────────────────────────────────────── */}
-        <rect width={width} height={height} fill="#030c1a" />
+        <rect width={width} height={height} fill="#010204" />
 
-        {/* ── Country borders ─────────────────────────────────────────────── */}
-        <g opacity={0.6}>
-          {countryPaths.map((d, i) => (
-            <path
-              key={i}
-              d={d}
-              fill="rgba(20,40,30,0.85)"
-              stroke="rgba(61,255,154,0.35)"
-              strokeWidth={0.5}
-            />
+        <g transform={`translate(${pan.x.toFixed(2)} ${pan.y.toFixed(2)}) scale(${zoom.toFixed(3)})`}>
+          <g opacity={0.92}>
+            {countryPaths.map((path, index) => (
+              <path
+                key={index}
+                d={path}
+                fill={COUNTRY_FILL}
+                stroke={COUNTRY_STROKE}
+                strokeWidth={0.75}
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </g>
+
+          {launchedArcData.map(({ strike, path }) => {
+            const palette = strikePalette(strike.side)
+            return (
+              <path
+                key={`fan-${strike.id}`}
+                d={path}
+                fill="none"
+                opacity={strike.impactTime <= currentTime ? 0.44 : 0.7}
+                stroke={palette.line}
+                strokeWidth={1.15}
+                vectorEffect="non-scaling-stroke"
+              />
+            )
+          })}
+
+          {launchedArcData.map(({ strike, path }) => {
+            const palette = strikePalette(strike.side)
+            return (
+              <path
+                key={`glow-${strike.id}`}
+                d={path}
+                fill="none"
+                opacity={strike.impactTime <= currentTime ? 0.18 : 0.28}
+                stroke={palette.glow}
+                strokeWidth={3.2}
+                vectorEffect="non-scaling-stroke"
+              />
+            )
+          })}
+
+          {activeMarkers.map(({ strike, point, tailPoint }) => (
+            <g key={`marker-${strike.id}`}>
+              <line
+                x1={tailPoint.x}
+                x2={point.x}
+                y1={tailPoint.y}
+                y2={point.y}
+                stroke={INCOMING_MARKER}
+                strokeWidth={1.4}
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle cx={point.x} cy={point.y} fill={INCOMING_MARKER} r={2.6} vectorEffect="non-scaling-stroke" />
+            </g>
           ))}
+
+          {impactBlooms.map(({ strike, cx, cy, scorchRadius, age, animatedRings }) => (
+            <g key={`impact-${strike.id}`}>
+              <circle
+                cx={cx}
+                cy={cy}
+                fill="rgba(255, 245, 240, 0.88)"
+                opacity={0.9}
+                r={Math.max(2.6, scorchRadius * 0.24)}
+                vectorEffect="non-scaling-stroke"
+              />
+              <circle
+                cx={cx}
+                cy={cy}
+                fill="rgba(255, 102, 61, 0.2)"
+                r={scorchRadius}
+                stroke="rgba(255, 145, 110, 0.38)"
+                strokeWidth={1.1}
+                vectorEffect="non-scaling-stroke"
+              />
+              {age <= BLAST_ANIMATION_SECONDS && animatedRings.map((ring, index) => (
+                <circle
+                  key={`${strike.id}-ring-${index}`}
+                  cx={cx}
+                  cy={cy}
+                  fill="none"
+                  opacity={ring.opacity * (1 - (age / BLAST_ANIMATION_SECONDS))}
+                  r={ring.animatedRadius}
+                  stroke={ring.color}
+                  strokeWidth={1.2}
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </g>
+          ))}
+
+          {highlightedCountries.map((country) => {
+            const [x, y] = project(country.lat, country.lng, width, height)
+            const color = country.id === aggressorId ? ATTACKER_LINE : DEFENDER_LINE
+            return (
+              <g key={country.id}>
+                <circle cx={x} cy={y} fill={color} opacity={0.9} r={4} vectorEffect="non-scaling-stroke" />
+                <circle cx={x} cy={y} fill="none" opacity={0.65} r={8} stroke={color} strokeWidth={1} vectorEffect="non-scaling-stroke" />
+              </g>
+            )
+          })}
         </g>
-
-        {/* ── Country labels ──────────────────────────────────────────────── */}
-        {countries.map((c) => {
-          const [x, y] = project(c.lat, c.lng, width, height)
-          return (
-            <text
-              key={c.id}
-              x={x}
-              y={y}
-              textAnchor="middle"
-              fontSize={width > 1000 ? 8 : 6}
-              fill="rgba(94,255,166,0.55)"
-              fontFamily="'JetBrains Mono', monospace"
-              pointerEvents="none"
-            >
-              {c.name.toUpperCase()}
-            </text>
-          )
-        })}
-
-        {/* ── Persistent trail lines (completed strikes) ─────────────────── */}
-        {trails.map((t) => (
-          <path
-            key={`trail-${t.strike.id}`}
-            d={arcPath(t.startX, t.startY, t.endX, t.endY, height)}
-            fill="none"
-            stroke={trailStrokeColor(t.strike.side)}
-            strokeWidth={1.2}
-          />
-        ))}
-
-        {/* ── Active in-flight arcs ────────────────────────────────────────── */}
-        {activeArcPaths.map((arc) => (
-          <path
-            key={`arc-${arc.id}`}
-            d={arc.d}
-            fill="none"
-            stroke={arc.color}
-            strokeWidth={1.5}
-            opacity={0.85}
-          />
-        ))}
-
-        {/* ── Blast rings (animated expand) ───────────────────────────────── */}
-        {ringEntries.map((entry) =>
-          entry.rings.map((ring, i) => (
-            <circle
-              key={`${entry.id}-ring-${i}`}
-              cx={entry.cx}
-              cy={entry.cy}
-              r={0}
-              fill="none"
-              stroke={ring.color}
-              strokeWidth={1.5}
-            >
-              <animate
-                attributeName="r"
-                from={0}
-                to={ring.maxR}
-                dur={`${RING_LIFETIME_MS / 1000}s`}
-                fill="freeze"
-              />
-              <animate
-                attributeName="opacity"
-                values="0.8;0.4;0"
-                keyTimes="0;0.5;1"
-                dur={`${RING_LIFETIME_MS / 1000}s`}
-                fill="freeze"
-              />
-            </circle>
-          )),
-        )}
-
-        {/* ── Country markers ──────────────────────────────────────────────── */}
-        {aggressorPos && (() => {
-          const [x, y] = project(aggressorPos.lat, aggressorPos.lng, width, height)
-          return <circle key="agg" cx={x} cy={y} r={5} fill="#ff4b3e" opacity={0.9} />
-        })()}
-        {targetPos && (() => {
-          const [x, y] = project(targetPos.lat, targetPos.lng, width, height)
-          return <circle key="tgt" cx={x} cy={y} r={5} fill="#4eddff" opacity={0.9} />
-        })()}
       </svg>
+
+      <div className="map-instructions hud-panel">
+        <span>DRAG TO PAN</span>
+        <span>SCROLL TO ZOOM</span>
+        <span>YELLOW = INCOMING WARHEADS</span>
+      </div>
     </div>
   )
 }

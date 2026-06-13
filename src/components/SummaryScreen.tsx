@@ -10,19 +10,13 @@ interface SummaryScreenProps {
 const numberFormatter = new Intl.NumberFormat()
 
 export default function SummaryScreen({ simulation, countries, onReset }: SummaryScreenProps) {
-  const countriesById = useMemo(
-    () => new Map(countries.map((country) => [country.id, country.name])),
-    [countries],
-  )
+  const countriesById = useMemo(() => new Map(countries.map((country) => [country.id, country.name])), [countries])
 
   const waveCount = simulation.strikes.length > 0 ? Math.max(...simulation.strikes.map((strike) => strike.wave)) : 0
   const sideTotals = simulation.strikes.reduce(
     (totals, strike) => {
-      if (strike.wave % 2 === 1) {
-        totals.firstStrikeSide += 1
-      } else {
-        totals.retaliatingSide += 1
-      }
+      if (strike.side === 'attacker') totals.firstStrikeSide += 1
+      else totals.retaliatingSide += 1
       return totals
     },
     { firstStrikeSide: 0, retaliatingSide: 0 },
@@ -39,7 +33,7 @@ export default function SummaryScreen({ simulation, countries, onReset }: Summar
         <p className="eyebrow">Simulation summary</p>
         <h1>Escalation outcome</h1>
         <p className="selection-copy">
-          Even under simplified public-data assumptions, retaliatory logic quickly expands the number of detonations and humanitarian losses.
+          {simulation.modelLabel}. Even with simplified assumptions, city-level counterforce logic rapidly multiplies detonations and civilian losses.
         </p>
 
         <div className="summary-grid">
@@ -52,11 +46,11 @@ export default function SummaryScreen({ simulation, countries, onReset }: Summar
             <strong>{numberFormatter.format(simulation.totalCasualties.injured)}</strong>
           </div>
           <div className="summary-stat">
-            <span>Warheads used by initiating side</span>
+            <span>Initiating-side launches</span>
             <strong>{numberFormatter.format(sideTotals.firstStrikeSide)}</strong>
           </div>
           <div className="summary-stat">
-            <span>Warheads used by retaliating side</span>
+            <span>Retaliating-side launches</span>
             <strong>{numberFormatter.format(sideTotals.retaliatingSide)}</strong>
           </div>
           <div className="summary-stat">
@@ -86,14 +80,14 @@ export default function SummaryScreen({ simulation, countries, onReset }: Summar
         </div>
 
         <div className="takeaway-box">
-          <h2>MAD takeaway</h2>
+          <h2>Educational takeaway</h2>
           <p>
-            Mutually Assured Destruction is a warning, not a strategy lesson: once retaliation pathways are triggered, harm compounds across borders faster than any side can control.
+            This simulator visualizes a simplified educational model, but the pattern is consistent: once retaliatory salvos begin, the path to stopping them narrows almost immediately.
           </p>
         </div>
 
         <button className="btn-primary" onClick={onReset} type="button">
-          Run Another Scenario
+          Run another scenario
         </button>
       </div>
     </section>
