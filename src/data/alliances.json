@@ -1,35 +1,42 @@
 {
-  "_comment": "Simplified alliance graph for educational simulation. Not a comprehensive or operational representation.",
+  "_comment": "Simplified alliance / bloc graph for the educational escalation simulator. EDUCATIONAL MODEL ONLY — not a real geopolitical claim, not operational. Groupings are broad approximations to show how a major exchange would cascade across blocs. Sources: publicly available alliance treaties and diplomatic relationships as of 2023.",
+
   "NATO": {
     "members": ["US", "UK", "France", "Germany", "Italy", "Poland", "Turkey"],
     "nuclearMembers": ["US", "UK", "France"],
-    "description": "North Atlantic Treaty Organization"
+    "description": "North Atlantic Treaty Organization — collective defence treaty (Article 5)"
   },
+
   "CSTO": {
     "members": ["Russia", "Belarus"],
     "nuclearMembers": ["Russia"],
     "description": "Collective Security Treaty Organization (simplified)"
   },
+
+  "WesternBloc": {
+    "_comment": "Broader US-led Western bloc including treaty allies in the Indo-Pacific. Non-nuclear allies still benefit from nuclear deterrence extended by the nuclear members. EDUCATIONAL SIMPLIFICATION.",
+    "members": ["US", "UK", "France", "Germany", "Italy", "Poland", "Turkey", "Japan", "SouthKorea", "Israel", "SaudiArabia"],
+    "nuclearMembers": ["US", "UK", "France"],
+    "description": "Western / US-led alliance bloc (NATO + Pacific treaty allies) — simplified educational model"
+  },
+
+  "EasternBloc": {
+    "_comment": "Broader adversarial / Eastern bloc grouping. China and North Korea are treated as aligned here for escalation modelling purposes only. Iran included as a geopolitically aligned actor. EDUCATIONAL SIMPLIFICATION.",
+    "members": ["Russia", "Belarus", "China", "NorthKorea", "Iran"],
+    "nuclearMembers": ["Russia", "China", "NorthKorea"],
+    "description": "Eastern / adversarial bloc (Russia + CSTO + China-NK axis) — simplified educational model"
+  },
+
   "bilateral": {
-    "China-NorthKorea": {
-      "members": ["China", "NorthKorea"],
-      "nuclearMembers": ["China", "NorthKorea"],
-      "description": "Sino-North Korean mutual defense (informal)"
-    },
     "India-standalone": {
       "members": ["India"],
       "nuclearMembers": ["India"],
-      "description": "India acts independently"
+      "description": "India maintains a policy of strategic autonomy and acts independently"
     },
     "Pakistan-standalone": {
       "members": ["Pakistan"],
       "nuclearMembers": ["Pakistan"],
-      "description": "Pakistan acts independently"
-    },
-    "Israel-standalone": {
-      "members": ["Israel"],
-      "nuclearMembers": ["Israel"],
-      "description": "Israel acts independently (ambiguous doctrine)"
+      "description": "Pakistan acts independently (not formally aligned to either bloc)"
     }
   }
 }

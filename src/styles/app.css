@@ -662,6 +662,61 @@ body::after {
   color: var(--amber);
 }
 
+/* ── Speed selector (inside Timeline panel) ────────────────────────────────── */
+
+.speed-selector {
+  display: flex;
+  gap: 0.35rem;
+  margin-bottom: 0.6rem;
+}
+
+.speed-btn {
+  flex: 1;
+  border: 1px solid rgba(61, 255, 154, 0.25);
+  border-radius: 5px;
+  padding: 0.3rem 0;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--green-dim);
+  background: rgba(61, 255, 154, 0.04);
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+
+.speed-btn:hover {
+  background: rgba(61, 255, 154, 0.1);
+  color: var(--green);
+}
+
+.speed-btn--active {
+  background: rgba(61, 255, 154, 0.15);
+  color: var(--green);
+  border-color: rgba(61, 255, 154, 0.55);
+}
+
+/* ── HUD header controls row ────────────────────────────────────────────────── */
+
+.hud-header-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+
+.btn-map-toggle {
+  font-size: 0.72rem;
+  padding: 0.45rem 0.8rem;
+  white-space: nowrap;
+}
+
+/* ── Flat map container ──────────────────────────────────────────────────────── */
+
+.flatmap-container svg {
+  display: block;
+}
+
 /* ── Responsive ────────────────────────────────────────────────────────────── */
 
 @media (max-width: 1100px) {

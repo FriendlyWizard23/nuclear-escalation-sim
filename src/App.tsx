@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import CasualtyReadout from './components/CasualtyReadout'
 import CountrySelector from './components/CountrySelector'
 import DisclaimerBanner from './components/DisclaimerBanner'
+import FlatMap from './components/FlatMap'
 import Globe from './components/Globe'
 import SummaryScreen from './components/SummaryScreen'
 import Timeline from './components/Timeline'
@@ -9,7 +10,6 @@ import alliancesData from './data/alliances.json'
 import arsenalsData from './data/arsenals.json'
 import countriesData from './data/countries.json'
 import {
-  CLOCK_SPEED,
   MAX_WAVES,
   buildSimulation,
   type AllianceMap,
@@ -22,7 +22,6 @@ import {
 const countries = countriesData as Country[]
 const arsenals = arsenalsData as ArsenalMap
 const alliances = alliancesData as AllianceMap
-const TICK_SECONDS = 0.1 * CLOCK_SPEED
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -42,14 +41,28 @@ export default function App() {
   const [isPlaying, setIsPlaying] = useState(false)
   const intervalRef = useRef<number | null>(null)
 
+  /** Live playback speed; user can toggle 2 / 4 / 8 / 16× during simulation */
+  const [clockSpeed, setClockSpeed] = useState(2)
+
+  /**
+   * Map rendering mode.
+   * '3d' → react-globe.gl sphere (default, more cinematic)
+   * '2d' → flat SVG equirectangular map (lower-overhead fallback)
+   */
+  const [mapMode, setMapMode] = useState<'3d' | '2d'>('3d')
+
   const totalDuration = simulation ? (simulation.events[simulation.events.length - 1]?.time ?? 0) : 0
 
   // ── Tick loop ────────────────────────────────────────────────────────────
+  // Each real-time tick advances the simulation clock by (0.1 × clockSpeed)
+  // seconds.  Recreated whenever isPlaying or clockSpeed changes so the
+  // interval always uses the latest speed without manual reset.
   useEffect(() => {
     if (phase !== 'simulation' || !simulation || !isPlaying) return
 
+    const tickSeconds = 0.1 * clockSpeed
     intervalRef.current = window.setInterval(() => {
-      setCurrentTime((prev) => Math.min(totalDuration, Number((prev + TICK_SECONDS).toFixed(1))))
+      setCurrentTime((prev) => Math.min(totalDuration, Number((prev + tickSeconds).toFixed(1))))
     }, 100)
 
     return () => {
@@ -58,7 +71,7 @@ export default function App() {
         intervalRef.current = null
       }
     }
-  }, [isPlaying, phase, simulation, totalDuration])
+  }, [isPlaying, phase, simulation, totalDuration, clockSpeed])
 
   useEffect(() => {
     return () => {
@@ -75,10 +88,10 @@ export default function App() {
   }, [currentTime, phase, simulation, totalDuration])
 
   // ── Stabilised strike references ─────────────────────────────────────────
-  // The Globe component must NOT re-render on every 100ms clock tick — only
-  // when a strike actually launches or impacts.  We achieve this by returning
-  // the previous array reference whenever the set of strike IDs hasn't
-  // changed, so React's props comparison marks them as equal.
+  // The Globe/FlatMap components must NOT re-render on every 100ms clock tick
+  // — only when a strike actually launches or impacts.  We achieve this by
+  // returning the previous array reference whenever the set of strike IDs
+  // hasn't changed, so React's props comparison marks them as equal.
   const prevActiveRef = useRef<{ ids: Set<string>; items: Strike[] }>({ ids: new Set(), items: [] })
 
   const activeStrikes = useMemo<Strike[]>(() => {
@@ -89,7 +102,6 @@ export default function App() {
     const nextIds = new Set(next.map((s) => s.id))
     const { ids: prevIds, items: prevItems } = prevActiveRef.current
 
-    // Return the SAME reference if the set is unchanged (avoids Globe re-render)
     const sameSet =
       nextIds.size === prevIds.size && [...nextIds].every((id) => prevIds.has(id))
     if (sameSet) return prevItems
@@ -117,7 +129,6 @@ export default function App() {
     return `${agg.toUpperCase()} → ${tgt.toUpperCase()}`
   }, [aggressorId, targetId])
 
-  // Current wave (for DEFCON display in the status bar)
   const currentWave = useMemo(() => {
     const all = [...activeStrikes, ...completedStrikes]
     return all.length === 0 ? 1 : Math.max(...all.map((s) => s.wave))
@@ -131,7 +142,6 @@ export default function App() {
     setCurrentTime(0)
     setIsPlaying(true)
     setPhase('simulation')
-    // Reset stable-ref caches for the new run
     prevActiveRef.current = { ids: new Set(), items: [] }
     prevCompletedRef.current = { count: 0, items: [] }
   }
@@ -148,6 +158,8 @@ export default function App() {
     prevActiveRef.current = { ids: new Set(), items: [] }
     prevCompletedRef.current = { count: 0, items: [] }
   }
+
+  const toggleMapMode = () => setMapMode((m) => (m === '3d' ? '2d' : '3d'))
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -170,27 +182,50 @@ export default function App() {
       )}
 
       {phase === 'simulation' && simulation && (
-        // Full-bleed simulation view: globe fills the viewport, HUD panels
+        // Full-bleed simulation view: globe/map fills the viewport, HUD panels
         // float as translucent overlays on top.
         <div className="simulation-fullbleed">
-          {/* ── Globe ── */}
-          <Globe
-            aggressorId={aggressorId}
-            targetId={targetId}
-            activeStrikes={activeStrikes}
-            completedStrikes={completedStrikes}
-            countries={countries}
-          />
+          {/* ── Map layer (3D globe or 2D flat map) ── */}
+          {mapMode === '3d' ? (
+            <Globe
+              aggressorId={aggressorId}
+              targetId={targetId}
+              activeStrikes={activeStrikes}
+              completedStrikes={completedStrikes}
+              countries={countries}
+              clockSpeed={clockSpeed}
+            />
+          ) : (
+            <FlatMap
+              aggressorId={aggressorId}
+              targetId={targetId}
+              activeStrikes={activeStrikes}
+              completedStrikes={completedStrikes}
+              countries={countries}
+              clockSpeed={clockSpeed}
+            />
+          )}
 
-          {/* ── Top-left HUD: scenario label + abort button ── */}
+          {/* ── Top-left HUD: scenario label + controls ── */}
           <header className="hud-header hud-panel">
             <div>
               <p className="eyebrow">LIVE SIMULATION</p>
               <h1 className="hud-title">{scenarioTitle}</h1>
             </div>
-            <button className="btn-secondary" onClick={resetSimulation} type="button">
-              ◼ ABORT
-            </button>
+            <div className="hud-header-controls">
+              {/* Toggle between 3D globe and flat 2D map */}
+              <button
+                className="btn-secondary btn-map-toggle"
+                onClick={toggleMapMode}
+                type="button"
+                title={mapMode === '3d' ? 'Switch to flat 2D map' : 'Switch to 3D globe'}
+              >
+                {mapMode === '3d' ? '🗺 2D MAP' : '🌍 3D GLOBE'}
+              </button>
+              <button className="btn-secondary" onClick={resetSimulation} type="button">
+                ◼ ABORT
+              </button>
+            </div>
           </header>
 
           {/* ── Right sidebar: Timeline + Casualty readout ── */}
@@ -201,6 +236,8 @@ export default function App() {
               isPlaying={isPlaying}
               onToggle={() => setIsPlaying((p) => !p)}
               events={simulation.events}
+              clockSpeed={clockSpeed}
+              onSpeedChange={setClockSpeed}
             />
             <CasualtyReadout completedStrikes={completedStrikes} countries={countries} />
           </aside>
@@ -223,7 +260,7 @@ export default function App() {
             <span className="status-item status-divider">|</span>
             <span className="status-item status-clock">T+ {formatClock(currentTime)}</span>
             <span className="status-item status-divider status-right">|</span>
-            <span className="status-item status-right">2× CLOCK SPEED</span>
+            <span className="status-item status-right">{clockSpeed}× SPEED · {mapMode.toUpperCase()}</span>
           </footer>
         </div>
       )}
