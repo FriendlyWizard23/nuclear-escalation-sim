@@ -1,0 +1,35 @@
+{
+  "_comment": "Simplified alliance graph for educational simulation. Not a comprehensive or operational representation.",
+  "NATO": {
+    "members": ["US", "UK", "France", "Germany", "Italy", "Poland", "Turkey"],
+    "nuclearMembers": ["US", "UK", "France"],
+    "description": "North Atlantic Treaty Organization"
+  },
+  "CSTO": {
+    "members": ["Russia", "Belarus"],
+    "nuclearMembers": ["Russia"],
+    "description": "Collective Security Treaty Organization (simplified)"
+  },
+  "bilateral": {
+    "China-NorthKorea": {
+      "members": ["China", "NorthKorea"],
+      "nuclearMembers": ["China", "NorthKorea"],
+      "description": "Sino-North Korean mutual defense (informal)"
+    },
+    "India-standalone": {
+      "members": ["India"],
+      "nuclearMembers": ["India"],
+      "description": "India acts independently"
+    },
+    "Pakistan-standalone": {
+      "members": ["Pakistan"],
+      "nuclearMembers": ["Pakistan"],
+      "description": "Pakistan acts independently"
+    },
+    "Israel-standalone": {
+      "members": ["Israel"],
+      "nuclearMembers": ["Israel"],
+      "description": "Israel acts independently (ambiguous doctrine)"
+    }
+  }
+}
