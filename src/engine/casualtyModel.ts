@@ -11,48 +11,48 @@ const ringDefinitions = [
   {
     name: 'Fireball',
     coefficient: 0.05,
-    color: 'rgba(255, 89, 0, 0.8)',
-    opacity: 0.8,
+    color: 'rgba(255, 110, 0, 0.85)',
+    opacity: 0.85,
     fractionFatal: 0.98,
     fractionInjured: 0.02,
   },
   {
     name: 'Heavy blast (20 psi)',
     coefficient: 0.28,
-    color: 'rgba(255, 140, 0, 0.55)',
-    opacity: 0.55,
+    color: 'rgba(255, 149, 0, 0.62)',
+    opacity: 0.62,
     fractionFatal: 0.72,
     fractionInjured: 0.2,
   },
   {
     name: 'Moderate blast (5 psi)',
     coefficient: 0.65,
-    color: 'rgba(255, 196, 0, 0.4)',
-    opacity: 0.4,
+    color: 'rgba(255, 196, 0, 0.48)',
+    opacity: 0.48,
     fractionFatal: 0.3,
     fractionInjured: 0.45,
   },
   {
     name: 'Radiation lethal zone',
     coefficient: 0.75,
-    color: 'rgba(121, 255, 214, 0.35)',
-    opacity: 0.35,
+    color: 'rgba(113, 224, 255, 0.34)',
+    opacity: 0.34,
     fractionFatal: 0.45,
     fractionInjured: 0.25,
   },
   {
     name: 'Thermal burns',
     coefficient: 1,
-    color: 'rgba(255, 99, 71, 0.28)',
-    opacity: 0.28,
+    color: 'rgba(255, 81, 47, 0.3)',
+    opacity: 0.3,
     fractionFatal: 0.12,
     fractionInjured: 0.45,
   },
   {
     name: 'Light blast (1 psi)',
     coefficient: 1.4,
-    color: 'rgba(255, 255, 255, 0.18)',
-    opacity: 0.18,
+    color: 'rgba(255, 245, 176, 0.2)',
+    opacity: 0.2,
     fractionFatal: 0.04,
     fractionInjured: 0.25,
   },
@@ -79,9 +79,9 @@ export function getBlastRings(yield_kt: number): BlastRing[] {
 
 /**
  * Estimates casualties by applying population density to concentric damage areas.
- * This is intentionally transparent and heuristic, not predictive.
+ * A population cap keeps small-city outcomes from exceeding the total city size.
  */
-export function estimateCasualties(yield_kt: number, populationDensity: number) {
+export function estimateCasualties(yield_kt: number, populationDensity: number, populationCap?: number) {
   const rings = getBlastRings(yield_kt)
   let previousRadius = 0
   let killed = 0
@@ -93,6 +93,15 @@ export function estimateCasualties(yield_kt: number, populationDensity: number) 
     killed += exposedPopulation * ring.fractionFatal
     injured += exposedPopulation * ring.fractionInjured
     previousRadius = ring.radius_km
+  }
+
+  if (typeof populationCap === 'number') {
+    const total = killed + injured
+    if (total > populationCap && total > 0) {
+      const scale = populationCap / total
+      killed *= scale
+      injured *= scale
+    }
   }
 
   const roundedKilled = Math.round(killed)
